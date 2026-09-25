@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import { readConfig, writeConfig } from './config.js';
 import { Manager } from './manager.js';
 import { serve } from './server.js';
+import { nativeReload, nativeStatus } from './codex.js';
 
 const program = new Command().name('codex-mcp-hotload').description('A stable MCP gateway for hot-reloading child MCP servers.').version('0.1.0');
 program.command('init').description('Create an empty configuration.').action(async () => { await writeConfig(await readConfig()); console.log('Created', process.env.CODEX_MCP_HOTLOAD_CONFIG ?? '~/.codex-mcp-hotload/config.json'); });
@@ -23,9 +24,10 @@ for (const verb of ['reload', 'watch', 'status'] as const) program.command(`${ve
     else { await manager.startAll(); console.log(JSON.stringify(manager.status().find((item) => item.name === name) ?? { error: 'NOT_FOUND' }, null, 2)); }
   } finally { await manager.close(); }
 });
-const codex = program.command('codex').description('Inspect supported Codex native control availability.');
-codex.command('status').action(() => console.log('Native Codex reload is unavailable unless an explicit supported app-server transport is configured. Gateway mode remains available.'));
-codex.command('reload').action(() => { console.error('Native Codex reload is not configured. The standard Desktop stdio session cannot be attached externally.'); process.exitCode = 2; });
+const codex = program.command('codex').description('Inspect or reload MCP configuration through a supported Codex app-server endpoint.');
+const nativeOptions = (command: Command) => command.option('--url <url>', 'App-server WebSocket URL').option('--socket <path>', 'App-server Unix control socket').option('--server <name>', 'Verify a named MCP server reached connected state');
+nativeOptions(codex.command('status')).action(async (options) => { const status = await nativeStatus({ ...(options.url ? { url: options.url } : {}), ...(options.socket ? { socketPath: options.socket } : {}) }); const result = status as { data?: Array<{ name: string }> }; console.log(JSON.stringify(options.server ? { ...result, data: result.data?.filter((item) => item.name === options.server) } : status, null, 2)); });
+nativeOptions(codex.command('reload')).action(async (options) => { const result = await nativeReload({ ...(options.url ? { url: options.url } : {}), ...(options.socket ? { socketPath: options.socket } : {}) }, options.server); console.log(JSON.stringify(result, null, 2)); if (!result.verified) process.exitCode = 2; });
 program.command('doctor').description('Check local prerequisites and configuration.').action(async () => {
   console.log(`Node ${process.versions.node} ${Number(process.versions.node.split('.')[0]) >= 20 ? '✓' : '✗ Node 20+ required'}`);
   const config = await readConfig(); console.log(`Configuration valid: ${Object.keys(config.servers).length} child server(s)`);

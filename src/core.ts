@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { Ajv } from 'ajv';
+import { Ajv2020 } from 'ajv/dist/2020.js';
 
 export type JsonSchema = Record<string, unknown>;
 export type ToolRecord = { server: string; name: string; title?: string; description?: string; inputSchema: JsonSchema; outputSchema?: JsonSchema; schemaHash: string; revision: number };
@@ -40,7 +40,7 @@ export class Registry {
   get(server: string, name: string): ToolRecord | undefined { return this.#servers.get(server)?.get(name); }
 }
 
-const ajv = new Ajv({ allErrors: true, strict: false });
+const ajv = new Ajv2020({ allErrors: true, strict: false });
 export function validateArguments(schema: JsonSchema, args: unknown): string[] {
   const validate = ajv.compile(schema);
   return validate(args) ? [] : (validate.errors ?? []).map((error) => `${error.instancePath || '/'} ${error.message ?? 'is invalid'}`);

@@ -6,7 +6,7 @@ export type ChildConfig = {
   transport: 'stdio' | 'streamable-http'; command?: string; args?: string[]; cwd?: string;
   url?: string; headers?: Record<string, string>; env?: Record<string, string>;
   watch?: string[]; build?: { command: string; args?: string[] };
-  restartDebounceMs?: number; startupTimeoutMs?: number; toolTimeoutMs?: number;
+  restartDebounceMs?: number; startupTimeoutMs?: number; toolTimeoutMs?: number; maxRestartAttempts?: number;
 };
 export type Config = { version: 1; servers: Record<string, ChildConfig> };
 export const configPath = () => process.env.CODEX_MCP_HOTLOAD_CONFIG ?? join(homedir(), '.codex-mcp-hotload', 'config.json');

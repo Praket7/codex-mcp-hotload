@@ -44,7 +44,24 @@ For watch mode, configure file globs and an optional build command in `~/.codex-
 }
 ```
 
-Run `codex-mcp-hotload watch my-server` or ask the bridge to reload after rebuilding. Environment references in HTTP headers use `$VARIABLE_NAME`; values are resolved at runtime and are not included in status output. Child server commands are configured locally and are not model-registerable.
+Run `codex-mcp-hotload watch my-server` or ask the bridge to reload after rebuilding. Stdio child crashes are restarted with 250 ms, 500 ms, 1 s, 2 s, and 5 s backoff, with five attempts by default; set `maxRestartAttempts` to change the bound. `hotload_server_status` reports recovery attempts and the last stderr tail. Environment references in HTTP headers use `$VARIABLE_NAME`; values are resolved at runtime and are not included in status output. Child server commands are configured locally and are not model-registerable.
+
+## Native Codex app-server control
+
+Native control uses Codex's supported app-server JSON-RPC methods, `config/mcpServer/reload` and `mcpServerStatus/list`. It connects to an explicit WebSocket endpoint or the local managed app-server Unix control socket; the default socket is under `$CODEX_HOME/app-server-control/` (or `~/.codex/app-server-control/). Use `--server` to wait for and verify a configured server's live tool catalog after reload:
+
+```bash
+codex-mcp-hotload codex status
+codex-mcp-hotload codex status --url ws://127.0.0.1:4500
+codex-mcp-hotload codex reload --server codex-mcp-hotload
+codex-mcp-hotload codex reload --socket ~/.codex/app-server-control/app-server-control.sock --server codex-mcp-hotload
+```
+
+This control path works only when a supported app-server endpoint is available. Standard Codex Desktop sessions may keep app-server on private stdio; external software cannot attach to that session, and this tool does not claim otherwise. Gateway mode continues working independently.
+
+## Same-thread acceptance test
+
+With the Codex CLI installed, run `npm run test:e2e`. It starts an isolated app-server and temporary `CODEX_HOME`, creates one thread, discovers/calls a fixture MCP, changes the fixture catalog and schema, invokes native reload, and verifies all calls and stale-schema handling through the same thread ID. It also crashes the child to verify automatic recovery and confirms a repeated crash loop stops at its configured attempt limit. It makes no model inference request and does not require a Codex account login.
 
 ## Other commands
 
@@ -70,4 +87,4 @@ npm pack --dry-run
 
 ## Scope
 
-Version 0.1 implements the stable gateway, stdio and Streamable HTTP child connections, local registration, config-based watch/rebuild, schema hashing and validation, search, reload diffing, and basic status. Native app-server control discovery, automatic bounded crash recovery, desktop acceptance, and cross-platform end-to-end fixtures remain follow-up work; this initial version does not claim the full v1 completion criteria in the original project brief.
+Version 0.2 includes the stable gateway, stdio and Streamable HTTP child connections, local registration, config-based watch/rebuild, schema hashing and draft-2020-12 validation, search, reload diffing, bounded stdio crash recovery, supported app-server WebSocket/Unix-socket controls, and a same-thread app-server E2E regression test. Real Desktop UI acceptance still depends on an externally available supported app-server endpoint; ordinary Desktop stdio sessions cannot be externally attached.

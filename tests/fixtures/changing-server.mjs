@@ -1,0 +1,11 @@
+import { McpServer } from '@modelcontextprotocol/server';
+import { serveStdio } from '@modelcontextprotocol/server/stdio';
+import { readFileSync } from 'node:fs';
+import { z } from 'zod';
+const version = Number(readFileSync(process.env.FIXTURE_STATE, 'utf8'));
+if (readFileSync(process.env.FIXTURE_STATE, 'utf8') === 'crash-loop') setTimeout(() => process.exit(17), 100);
+const server = new McpServer({ name: 'changing-fixture', version: String(version) });
+server.registerTool('echo', { inputSchema: { text: version >= 3 ? z.number() : z.string() } }, async ({ text }) => ({ content: [{ type: 'text', text: String(text) }] }));
+server.registerTool('crash_child', { description: 'Crash the child to exercise recovery.', inputSchema: {} }, async () => { setTimeout(() => process.exit(17), 100); return { content: [{ type: 'text', text: 'child exiting' }] }; });
+if (version >= 2) server.registerTool('git_branch', { description: 'Return the fixture branch.', inputSchema: {} }, async () => ({ content: [{ type: 'text', text: 'main' }] }));
+serveStdio(() => server);

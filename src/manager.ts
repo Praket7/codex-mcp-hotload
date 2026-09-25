@@ -6,13 +6,13 @@ import chokidar, { type FSWatcher } from 'chokidar';
 import type { ChildConfig } from './config.js';
 import { Registry } from './core.js';
 
-type Managed = { config: ChildConfig; client: Client | undefined;  watcher: FSWatcher | undefined; state: string; lastReload: string | undefined; lastError: string | undefined; stderr: string[]; restartCount: number; startedAt: number | undefined; lock: Promise<unknown> };
+type Managed = { config: ChildConfig; client: Client | undefined;  watcher: FSWatcher | undefined; state: string; lastReload: string | undefined; lastError: string | undefined; stderr: string[]; restartCount: number; startedAt: number | undefined; recoveryAttempt: number; recoveryTimer: NodeJS.Timeout | undefined; lock: Promise<unknown> };
 
 export class Manager {
   readonly registry = new Registry();
   readonly #servers = new Map<string, Managed>();
   constructor(readonly definitions: Record<string, ChildConfig>) {
-    for (const [name, config] of Object.entries(definitions)) this.#servers.set(name, { config, client: undefined, watcher: undefined, state: 'stopped', lastReload: undefined, lastError: undefined, stderr: [], restartCount: 0, startedAt: undefined, lock: Promise.resolve() });
+    for (const [name, config] of Object.entries(definitions)) this.#servers.set(name, { config, client: undefined, watcher: undefined, state: 'stopped', lastReload: undefined, lastError: undefined, stderr: [], restartCount: 0, startedAt: undefined, recoveryAttempt: 0, recoveryTimer: undefined, lock: Promise.resolve() });
   }
   names() { return [...this.#servers.keys()]; }
   async startAll() { await Promise.allSettled(this.names().map((name) => this.reload(name))); }
@@ -26,12 +26,17 @@ export class Manager {
         await this.#stop(server, name);
         server.state = 'starting';
         const { client } = await this.#connect(server);
-        server.client = client; server.state = 'ready'; server.lastReload = new Date().toISOString(); server.startedAt = Date.now(); server.lastError = undefined;
-        const response = await client.listTools();
+        if (server.startedAt) server.restartCount++;
+        server.client = client; server.state = 'ready'; clearTimeout(server.recoveryTimer); server.recoveryTimer = undefined; server.lastReload = new Date().toISOString(); server.startedAt = Date.now(); server.lastError = undefined;
+        const response = await withTimeout(client.listTools(), server.config.startupTimeoutMs ?? 10_000, `Discovering tools for ${name}`);
         const diff = this.registry.replace(name, response.tools.map((tool) => ({ name: tool.name, ...(tool.title ? { title: tool.title } : {}), ...(tool.description ? { description: tool.description } : {}), inputSchema: tool.inputSchema as Record<string, unknown>, ...(tool.outputSchema ? { outputSchema: tool.outputSchema as Record<string, unknown> } : {}) })));
+        if (build) server.recoveryAttempt = 0;
         return diff;
       } catch (error) {
-        server.state = 'failed'; server.lastError = (error as Error).message; this.registry.replace(name, []); throw error;
+        server.lastError = (error as Error).message;
+        if (server.client && server.state === 'building') server.state = 'ready';
+        else { server.state = 'failed'; this.registry.replace(name, []); }
+        throw error;
       }
     });
     server.lock = operation.catch(() => undefined);
@@ -41,14 +46,27 @@ export class Manager {
     const client = new Client({ name: 'codex-mcp-hotload', version: '0.1.0' });
     if (server.config.transport === 'stdio') {
       const transport = new StdioClientTransport({ command: server.config.command!, args: server.config.args ?? [], ...(server.config.cwd ? { cwd: server.config.cwd } : {}), env: Object.fromEntries(Object.entries({ ...process.env, ...server.config.env }).filter((entry): entry is [string, string] => entry[1] !== undefined)) });
-      transport.stderr?.on('data', (chunk: Buffer) => { server.stderr.push(chunk.toString()); server.stderr = server.stderr.join('').slice(-8192).split('\n'); });
-      try { await client.connect(transport); } catch (error) { await client.close().catch(() => undefined); throw error; }
+      transport.onclose = () => { if (server.state === 'ready' && server.client) { server.client = undefined; server.state = 'crash_backoff'; server.lastError = 'Child MCP connection closed unexpectedly'; this.registry.replace(this.#name(server), []); this.#scheduleRecovery(this.#name(server), server); } };
+      transport.stderr?.on('data', (chunk: Buffer) => this.#recordStderr(server, chunk.toString()));
+      try { await withTimeout(client.connect(transport), server.config.startupTimeoutMs ?? 10_000, `Starting ${this.#name(server)}`); } catch (error) { await client.close().catch(() => undefined); throw error; }
       return { client };
     }
     const headers: Record<string, string> = {};
     for (const [key, value] of Object.entries(server.config.headers ?? {})) { const resolved = value.startsWith('$') ? process.env[value.slice(1)] : value; if (resolved !== undefined) headers[key] = resolved; }
     await client.connect(new StreamableHTTPClientTransport(new URL(server.config.url!), { requestInit: { headers } }));
     return { client };
+  }
+  #recordStderr(server: Managed, value: string) {
+    const secrets = Object.entries({ ...process.env, ...server.config.env }).filter(([key, secret]) => secret && /TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL/i.test(key)).map(([, secret]) => secret!);
+    const safe = secrets.reduce((line, secret) => line.replaceAll(secret, '[REDACTED]'), value).replace(/\b(Bearer\s+)[A-Za-z0-9._~+\/-]+=*/gi, '$1[REDACTED]').replace(/\b(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{20,})\b/g, '[REDACTED]').replace(/((?:token|secret|password|api[_-]?key)\s*[=:]\s*)[^\s,;]+/gi, '$1[REDACTED]');
+    server.stderr = (server.stderr.join('') + safe).slice(-8192).split('\n');
+  }
+  #scheduleRecovery(name: string, server: Managed) {
+    const maximum = server.config.maxRestartAttempts ?? 5;
+    if (server.recoveryAttempt >= maximum) { server.state = 'failed'; server.lastError = `Child recovery stopped after ${maximum} attempts`; return; }
+    const waits = [250, 500, 1000, 2000, 5000];
+    const wait = waits[Math.min(server.recoveryAttempt, waits.length - 1)]!;
+    server.recoveryAttempt++; server.recoveryTimer = setTimeout(() => { void this.reload(name, false).catch(() => { if (server.state === 'failed' && server.recoveryAttempt < maximum) this.#scheduleRecovery(name, server); }); }, wait);
   }
   #name(target: Managed) { return [...this.#servers].find(([, value]) => value === target)?.[0] ?? ''; }
   async #runBuild(server: Managed) {
@@ -59,7 +77,7 @@ export class Manager {
     });
   }
   async #stop(server: Managed, name: string) {
-    server.state = 'stopping';
+    server.state = 'stopping'; clearTimeout(server.recoveryTimer); server.recoveryTimer = undefined;
     await server.watcher?.close(); server.watcher = undefined;
     await server.client?.close().catch(() => undefined); server.client = undefined;
     server.state = 'stopped';
@@ -67,7 +85,8 @@ export class Manager {
   }
   async stop(name: string) { const server = this.#servers.get(name); if (server) await this.#stop(server, name); }
   getClient(name: string) { return this.#servers.get(name)?.client; }
-  status() { return [...this.#servers.entries()].map(([name, s]) => ({ name, state: s.state, transport: s.config.transport, revision: this.registry.list(name)[0]?.revision ?? 0, toolCount: this.registry.list(name).length, lastReload: s.lastReload ?? null, lastError: s.lastError ?? null, restartCount: s.restartCount, uptimeMs: s.startedAt ? Date.now() - s.startedAt : null, watch: Boolean(s.watcher), stderrTail: s.stderr.join('').slice(-2000) })); }
+  toolTimeout(name: string) { return this.#servers.get(name)?.config.toolTimeoutMs ?? 60_000; }
+  status() { return [...this.#servers.entries()].map(([name, s]) => ({ name, state: s.state, transport: s.config.transport, revision: this.registry.list(name)[0]?.revision ?? 0, toolCount: this.registry.list(name).length, lastReload: s.lastReload ?? null, lastError: s.lastError ?? null, restartCount: s.restartCount, recoveryAttempt: s.recoveryAttempt, uptimeMs: s.startedAt ? Date.now() - s.startedAt : null, watch: Boolean(s.watcher), stderrTail: s.stderr.join('').slice(-2000) })); }
   async watch(name: string) {
     const server = this.#servers.get(name); if (!server) throw new Error(`Unknown server: ${name}`);
     if (!server.config.watch?.length) throw new Error(`${name} has no watch patterns; configure watch in config.json`);
@@ -76,4 +95,9 @@ export class Manager {
     let timer: NodeJS.Timeout | undefined;
     watcher.on('all', () => { clearTimeout(timer); timer = setTimeout(() => { void this.reload(name).catch(() => undefined); }, server.config.restartDebounceMs ?? 300); });
   }
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout;
+  return Promise.race([promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs); })]).finally(() => clearTimeout(timer!));
 }

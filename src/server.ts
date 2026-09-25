@@ -4,10 +4,11 @@ import { z } from 'zod';
 import type { Manager } from './manager.js';
 import { searchTools, validateArguments } from './core.js';
 
+const withTimeout = <T>(promise: Promise<T>, timeoutMs: number): Promise<T> => { let timer: NodeJS.Timeout; return Promise.race([promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`Tool call timed out after ${timeoutMs}ms`)), timeoutMs); })]).finally(() => clearTimeout(timer!)); };
 const text = (data: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(data) }] });
 const fail = (code: string, message: string, extra: object = {}) => text({ error: { code, message, ...extra } });
 export function createServer(manager: Manager) {
-  const server = new McpServer({ name: 'codex-mcp-hotload', version: '0.1.0' });
+  const server = new McpServer({ name: 'codex-mcp-hotload', version: '0.2.0' });
   server.registerTool('hotload_list_servers', { description: 'List configured child MCP servers and their readiness.', inputSchema: {} }, async () => text({ servers: manager.status() }));
   server.registerTool('hotload_server_status', { description: 'Show runtime status for a child MCP server.', inputSchema: { server: z.string() } }, async ({ server: name }) => {
     const item = manager.status().find((server) => server.name === name); return item ? text(item) : fail('NOT_FOUND', `Unknown server: ${name}`);
@@ -21,7 +22,7 @@ export function createServer(manager: Manager) {
     if (expectedSchemaHash && expectedSchemaHash !== record.schemaHash) return fail('STALE_SCHEMA', 'Tool schema has changed.', { oldSchemaHash: expectedSchemaHash, currentSchemaHash: record.schemaHash, currentSchema: record.inputSchema });
     const errors = validateArguments(record.inputSchema, args); if (errors.length) return fail('INVALID_ARGUMENTS', errors.join('; '), { schemaHash: record.schemaHash });
     const client = manager.getClient(name); if (!client) return fail('SERVER_UNAVAILABLE', `${name} is not ready.`);
-    try { const result = await client.callTool({ name: toolName, arguments: args }); return text({ server: name, tool: toolName, schemaHash: record.schemaHash, result }); }
+    try { const result = await withTimeout(client.callTool({ name: toolName, arguments: args }), manager.toolTimeout(name)); return text({ server: name, tool: toolName, schemaHash: record.schemaHash, result }); }
     catch (error) { return fail('CALL_FAILED', (error as Error).message); }
   });
   return server;
