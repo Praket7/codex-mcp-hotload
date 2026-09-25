@@ -1,0 +1,41 @@
+{
+  "name": "codex-mcp-hotload",
+  "version": "0.1.0",
+  "description": "A stable MCP gateway for developing and hot-reloading child MCP servers in Codex.",
+  "type": "module",
+  "bin": {
+    "codex-mcp-hotload": "dist/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test",
+    "dev": "tsx src/cli.ts serve"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0",
+    "ajv": "^8.17.1",
+    "chokidar": "^4.0.3",
+    "commander": "^14.0.0",
+    "zod": "^4.1.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md"
+  ],
+  "main": "./dist/cli.js",
+  "exports": {
+    "./core": "./dist/core.js"
+  }
+}
