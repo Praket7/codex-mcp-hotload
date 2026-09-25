@@ -35,7 +35,8 @@
     "dist",
     "README.md",
     "LICENSE",
-    "SECURITY.md"
+    "SECURITY.md",
+    "docs/images"
   ],
   "main": "./dist/cli.js",
   "exports": {
