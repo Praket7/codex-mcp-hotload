@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createConnection } from 'node:net';
 import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -25,10 +25,10 @@ const notify = [];
 try {
   await mkdir(join(home, 'project'));
   await writeFile(fixtureState, '1');
-  await writeFile(bridgeConfig, JSON.stringify({ version: 1, servers: { fixture: { transport: 'stdio', command: process.execPath, args: [join(root, 'tests/fixtures/changing-server.mjs')], cwd: root, env: { FIXTURE_STATE: fixtureState }, startupTimeoutMs: 10_000, maxRestartAttempts: 3 } } }));
-  await writeFile(appConfig, `[mcp_servers.codex-mcp-hotload]\ncommand = ${JSON.stringify(process.execPath)}\nargs = [${JSON.stringify(join(root, 'dist/cli.js'))}, "serve"]\n[mcp_servers.codex-mcp-hotload.env]\nCODEX_MCP_HOTLOAD_CONFIG = ${JSON.stringify(bridgeConfig)}\n`);
+  await writeFile(bridgeConfig, JSON.stringify({ version: 1, servers: {} }));
+  await writeFile(appConfig, `[mcp_servers.codex-mcp-hotload]\ncommand = ${JSON.stringify(process.execPath)}\nargs = [${JSON.stringify(join(root, 'dist/cli.js'))}, "serve"]\n[mcp_servers.codex-mcp-hotload.env]\nCODEX_MCP_HOTLOAD_CONFIG = ${JSON.stringify(bridgeConfig)}\nFIXTURE_STATE = ${JSON.stringify(fixtureState)}\n`);
   const port = endpoint.url ? new URL(endpoint.url).port : undefined;
-  child = spawn(codex, ['app-server', '--listen', listenUrl], { env: { ...process.env, CODEX_HOME: home, CODEX_CONFIG: appConfig }, stdio: ['ignore', 'pipe', 'pipe'] });
+  child = spawn(codex, ['app-server', '--listen', listenUrl], { env: { ...process.env, CODEX_HOME: home, CODEX_CONFIG: appConfig, FIXTURE_STATE: fixtureState }, stdio: ['ignore', 'pipe', 'pipe'] });
   let stderr = ''; child.stderr.on('data', (data) => { stderr = (stderr + data.toString()).slice(-6000); });
   await waitFor(async () => { if (useUnixSocket) { try { await access(controlSocket); return true; } catch { return false; } } try { const response = await fetch(`http://127.0.0.1:${port}/readyz`); return response.ok; } catch { return false; } }, 30_000, () => stderr);
   ws = useUnixSocket ? new WebSocket('ws://localhost', { createConnection: () => createConnection(controlSocket), perMessageDeflate: false }) : new WebSocket(endpoint.url);
@@ -42,6 +42,8 @@ try {
   let lastStatus;
   await waitFor(async () => { lastStatus = await rpc('mcpServerStatus/list', {}); const items = lastStatus.data ?? lastStatus.servers ?? []; return items.some((item) => item.name === 'codex-mcp-hotload' && item.tools && Object.keys(item.tools).length >= 5); }, 20_000, () => `${JSON.stringify(lastStatus)}\n${stderr}`);
   const call = async (server, tool, args = {}) => rpc('mcpServer/tool/call', { threadId, server, tool, arguments: args });
+  execFileSync(process.execPath, [join(root, 'dist/cli.js'), 'add', 'fixture', '--cwd', root, '--', process.execPath, join(root, 'tests/fixtures/changing-server.mjs')], { env: { ...process.env, CODEX_MCP_HOTLOAD_CONFIG: bridgeConfig } });
+  const childConfig = JSON.parse(await readFile(bridgeConfig, 'utf8')); childConfig.servers.fixture.maxRestartAttempts = 3; await writeFile(bridgeConfig, JSON.stringify(childConfig));
   const search1 = await call('codex-mcp-hotload', 'hotload_search_tools', { query: 'echo', server: 'fixture' });
   assert(findText(search1).includes('echo'), 'v1 echo tool discoverable');
   const echo1 = await call('codex-mcp-hotload', 'hotload_call_tool', { server: 'fixture', tool: 'echo', arguments: { text: 'v1' } });
@@ -69,7 +71,7 @@ try {
   let finalChildStatus;
   await waitFor(async () => { const r = await call('codex-mcp-hotload', 'hotload_server_status', { server: 'fixture' }); finalChildStatus = JSON.parse(findText(r)); return finalChildStatus.state === 'failed' && finalChildStatus.recoveryAttempt === 3; }, 15_000);
   assert((await rpc('thread/read', { threadId })).thread.id === threadId, 'thread ID remains the same across reloads');
-  console.log(JSON.stringify({ passed: true, threadId, boundedCrashRecovery: finalChildStatus.recoveryAttempt, phases: ['initial discovery and call', 'child catalog update', 'same-thread discovery and call', 'native reload and status verification', 'stale schema rejection', 'updated-schema call', 'crash recovery', 'bounded crash-loop stop'] }, null, 2));
+  console.log(JSON.stringify({ passed: true, threadId, boundedCrashRecovery: finalChildStatus.recoveryAttempt, phases: ['register child after thread start', 'initial discovery and call', 'child catalog update', 'same-thread discovery and call', 'native reload and status verification', 'stale schema rejection', 'updated-schema call', 'crash recovery', 'bounded crash-loop stop'] }, null, 2));
 } finally {
   ws?.close(); child?.kill('SIGTERM');
   if (child) await Promise.race([new Promise((resolveExit) => child.once('exit', resolveExit)), delay(2000)]);

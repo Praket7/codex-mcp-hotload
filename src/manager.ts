@@ -3,18 +3,42 @@ import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import chokidar, { type FSWatcher } from 'chokidar';
-import type { ChildConfig } from './config.js';
-import { Registry } from './core.js';
+import { readConfig, type ChildConfig } from './config.js';
+import { canonicalJson, Registry } from './core.js';
 
 type Managed = { config: ChildConfig; client: Client | undefined;  watcher: FSWatcher | undefined; state: string; lastReload: string | undefined; lastError: string | undefined; stderr: string[]; restartCount: number; startedAt: number | undefined; recoveryAttempt: number; recoveryTimer: NodeJS.Timeout | undefined; lock: Promise<unknown> };
 
 export class Manager {
   readonly registry = new Registry();
   readonly #servers = new Map<string, Managed>();
+  #configSync: Promise<void> = Promise.resolve();
   constructor(readonly definitions: Record<string, ChildConfig>) {
     for (const [name, config] of Object.entries(definitions)) this.#servers.set(name, { config, client: undefined, watcher: undefined, state: 'stopped', lastReload: undefined, lastError: undefined, stderr: [], restartCount: 0, startedAt: undefined, recoveryAttempt: 0, recoveryTimer: undefined, lock: Promise.resolve() });
   }
   names() { return [...this.#servers.keys()]; }
+  refreshConfig() {
+    const operation = this.#configSync.then(async () => {
+      const latest = (await readConfig()).servers;
+      for (const name of this.names()) if (!(name in latest)) {
+        await this.stop(name); this.registry.replace(name, []); this.#servers.delete(name);
+      }
+      const reload = new Set<string>();
+      for (const [name, config] of Object.entries(latest)) {
+        const existing = this.#servers.get(name);
+        if (!existing) {
+          this.#servers.set(name, { config, client: undefined, watcher: undefined, state: 'stopped', lastReload: undefined, lastError: undefined, stderr: [], restartCount: 0, recoveryAttempt: 0, recoveryTimer: undefined, startedAt: undefined, lock: Promise.resolve() });
+          reload.add(name);
+        } else if (canonicalJson(existing.config) !== canonicalJson(config)) {
+          existing.config = config;
+          reload.add(name);
+        }
+      }
+      await Promise.allSettled([...reload].map((name) => this.reload(name)));
+    });
+    this.#configSync = operation.catch(() => undefined);
+    return operation;
+  }
+
   async startAll() { await Promise.allSettled(this.names().map((name) => this.reload(name))); }
   async close() { await Promise.all(this.names().map((name) => this.stop(name))); }
   async reload(name: string, build = true) {
@@ -43,7 +67,7 @@ export class Manager {
     return operation;
   }
   async #connect(server: Managed): Promise<{ client: Client }> {
-    const client = new Client({ name: 'codex-mcp-hotload', version: '0.2.0' });
+    const client = new Client({ name: 'codex-mcp-hotload', version: '0.2.1' });
     if (server.config.transport === 'stdio') {
       const transport = new StdioClientTransport({ command: server.config.command!, args: server.config.args ?? [], ...(server.config.cwd ? { cwd: server.config.cwd } : {}), env: Object.fromEntries(Object.entries({ ...process.env, ...server.config.env }).filter((entry): entry is [string, string] => entry[1] !== undefined)) });
       transport.onclose = () => { if (server.state === 'ready' && server.client) { server.client = undefined; server.state = 'crash_backoff'; server.lastError = 'Child MCP connection closed unexpectedly'; this.registry.replace(this.#name(server), []); this.#scheduleRecovery(this.#name(server), server); } };
