@@ -3,7 +3,14 @@ import { Ajv2020 } from 'ajv/dist/2020.js';
 
 export type JsonSchema = Record<string, unknown>;
 export type ToolRecord = { server: string; name: string; title?: string; description?: string; inputSchema: JsonSchema; outputSchema?: JsonSchema; schemaHash: string; revision: number };
-export type CatalogDiff = { revision: number; added: string[]; removed: string[]; changed: string[] };
+export type ToolSummary = { name: string; title?: string; description?: string; schemaHash: string };
+export type CatalogDiff = {
+  revision: number;
+  added: string[];
+  removed: string[];
+  changed: string[];
+  changes: { added: ToolSummary[]; removed: ToolSummary[]; changed: Array<{ name: string; previous: ToolSummary; current: ToolSummary }> };
+};
 
 export function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
@@ -11,8 +18,15 @@ export function canonicalJson(value: unknown): string {
   return JSON.stringify(value) ?? 'null';
 }
 
-export function schemaHash(tool: Pick<ToolRecord, 'name' | 'inputSchema' | 'outputSchema'>): string {
-  return `sha256:${createHash('sha256').update(`${tool.name}\n${canonicalJson(tool.inputSchema)}\n${canonicalJson(tool.outputSchema ?? {})}`).digest('hex')}`;
+export function schemaHash(tool: Pick<ToolRecord, 'name' | 'title' | 'description' | 'inputSchema' | 'outputSchema'>): string {
+  const content = {
+    name: tool.name,
+    title: tool.title ?? null,
+    description: tool.description ?? null,
+    inputSchema: tool.inputSchema,
+    outputSchema: tool.outputSchema ?? {},
+  };
+  return `sha256:${createHash('sha256').update(canonicalJson(content)).digest('hex')}`;
 }
 
 export class Registry {
@@ -30,7 +44,18 @@ export class Registry {
     this.#revisions.set(server, revision);
     for (const tool of next.values()) tool.revision = revision;
     this.#servers.set(server, next);
-    return { revision, added, removed, changed };
+    const summary = ({ name, title, description, schemaHash }: ToolRecord): ToolSummary => ({ name, ...(title ? { title } : {}), ...(description ? { description } : {}), schemaHash });
+    return {
+      revision,
+      added,
+      removed,
+      changed,
+      changes: {
+        added: added.map((name) => summary(next.get(name)!)),
+        removed: removed.map((name) => summary(previous.get(name)!)),
+        changed: changed.map((name) => ({ name, previous: summary(previous.get(name)!), current: summary(next.get(name)!) })),
+      },
+    };
   }
 
   list(server?: string): ToolRecord[] {

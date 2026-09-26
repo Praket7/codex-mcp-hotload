@@ -40,6 +40,8 @@ Then ask Codex to search for the child server tools and call one. When you chang
 
 The gateway connects to local stdio servers and Streamable HTTP servers. It lists and searches their tools, checks arguments against the current schema, and detects when a saved schema is stale. It can watch files and rebuild a child when configured. If a stdio child exits unexpectedly, the gateway retries it with bounded backoff and reports its status.
 
+Tool hashes cover names, titles, descriptions, and input and output schemas. Reload results show the old and new tool details when something changes. Search for the tool before each call and pass the returned `schemaHash`. Calls without a hash or with an old hash are rejected.
+
 Codex native reload is available when a supported app server endpoint can be reached. A standard Desktop session may not expose an endpoint for external control. The gateway features work without native reload.
 
 ## Native Codex controls
