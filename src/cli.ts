@@ -5,7 +5,7 @@ import { Manager } from './manager.js';
 import { serve } from './server.js';
 import { nativeReload, nativeStatus } from './codex.js';
 
-const program = new Command().name('codex-mcp-hotload').description('A stable MCP gateway for hot-reloading child MCP servers.').version('0.2.1');
+const program = new Command().name('codex-mcp-hotload').description('A stable MCP gateway for hot-reloading child MCP servers.').version('0.2.2');
 program.command('init').description('Create an empty configuration.').action(async () => { await writeConfig(await readConfig()); console.log('Created', process.env.CODEX_MCP_HOTLOAD_CONFIG ?? '~/.codex-mcp-hotload/config.json'); });
 program.command('add <name>').argument('[command...]').option('--cwd <path>').option('--watch <glob...>').option('--build <command>').description('Register a stdio child MCP server.').allowUnknownOption().action(async (name: string, command: string[], options) => {
   const config = await readConfig(); const split = command.indexOf('--'); const actual = split >= 0 ? command.slice(split + 1) : command;

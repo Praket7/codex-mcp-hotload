@@ -4,14 +4,14 @@
 
 Develop MCP servers while keeping one stable connection in Codex. Add a server, rebuild it, and discover its current tools from the same conversation.
 
-## Download version 0.2.1
+## Download version 0.2.2
 
-Use Node.js 20 or newer. Codex will download and run the exact published npm release from the configuration below. The latest version is 0.2.1. Pinning the version keeps future releases from changing your setup unexpectedly.
+Use Node.js 20 or newer. Codex will download and run the exact published npm release from the configuration below. The latest version is 0.2.2. Pinning the version keeps future releases from changing your setup unexpectedly.
 
 To install the same version globally for terminal use, run this command.
 
 ```bash
-npm install --global codex-mcp-hotload@0.2.1
+npm install --global codex-mcp-hotload@0.2.2
 ```
 
 ## Connect Codex
@@ -21,7 +21,7 @@ Add this server entry to your Codex configuration file at `~/.codex/config.toml`
 ```toml
 [mcp_servers.codex-mcp-hotload]
 command = "npx"
-args = ["--yes", "codex-mcp-hotload@0.2.1", "serve"]
+args = ["--yes", "codex-mcp-hotload@0.2.2", "serve"]
 ```
 
 Restart Codex once after adding the gateway. The gateway stays connected while you add and reload child servers.

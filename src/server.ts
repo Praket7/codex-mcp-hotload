@@ -8,7 +8,7 @@ const withTimeout = <T>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
 const text = (data: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(data) }] });
 const fail = (code: string, message: string, extra: object = {}) => text({ error: { code, message, ...extra } });
 export function createServer(manager: Manager) {
-  const server = new McpServer({ name: 'codex-mcp-hotload', version: '0.2.1' });
+  const server = new McpServer({ name: 'codex-mcp-hotload', version: '0.2.2' });
   server.registerTool('hotload_list_servers', { description: 'List configured child MCP servers and their readiness.', inputSchema: {} }, async () => { await manager.refreshConfig(); return text({ servers: manager.status() }); });
   server.registerTool('hotload_server_status', { description: 'Show runtime status for a child MCP server.', inputSchema: { server: z.string() } }, async ({ server: name }) => {
     await manager.refreshConfig();
