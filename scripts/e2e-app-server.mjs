@@ -84,6 +84,16 @@ try {
   const newEcho = JSON.parse(findText(search3)).matches.find((tool) => tool.name === 'echo');
   const echo3 = await call('codex-mcp-hotload', 'hotload_call_tool', { server: 'fixture', tool: 'echo', arguments: { text: 7 }, expectedSchemaHash: newEcho.schemaHash });
   assert(findText(echo3).includes('7'), 'updated schema executes');
+  const fixtureConfig = JSON.parse(await readFile(bridgeConfig, 'utf8'));
+  await writeFile(bridgeConfig, JSON.stringify({ ...fixtureConfig, servers: {} }));
+  const removedSearch = JSON.parse(findText(await call('codex-mcp-hotload', 'hotload_search_tools', { query: 'echo', server: 'fixture' })));
+  assert(removedSearch.matches.length === 0, 'removed server tools disappear from same-thread search');
+  const removedCall = await call('codex-mcp-hotload', 'hotload_call_tool', { server: 'fixture', tool: 'echo', arguments: { text: 'removed' }, expectedSchemaHash: newEcho.schemaHash });
+  assert(removedCall.isError === true && findText(removedCall).includes('NOT_FOUND'), 'removed server tools cannot be called from the same thread');
+  assert((await rpc('thread/read', { threadId })).thread.id === threadId, 'mid-session server removal keeps the same thread open');
+  await writeFile(bridgeConfig, JSON.stringify(fixtureConfig));
+  const restoredSearch = JSON.parse(findText(await call('codex-mcp-hotload', 'hotload_search_tools', { query: 'crash_child', server: 'fixture' })));
+  assert(restoredSearch.matches.some((tool) => tool.name === 'crash_child'), 'server can be re-added after same-thread removal');
   const crashSearch = await call('codex-mcp-hotload', 'hotload_search_tools', { query: 'crash_child', server: 'fixture' });
   const crashTool = JSON.parse(findText(crashSearch)).matches.find((tool) => tool.name === 'crash_child');
   await call('codex-mcp-hotload', 'hotload_call_tool', { server: 'fixture', tool: 'crash_child', arguments: {}, expectedSchemaHash: crashTool.schemaHash }).catch(() => undefined);
@@ -103,7 +113,7 @@ try {
   const afterStaleCalls = JSON.parse(findText(await call('codex-mcp-hotload', 'hotload_server_status', { server: 'fixture' })));
   assert(afterStaleCalls.state === 'failed' && afterStaleCalls.recoveryAttempt === 3 && afterStaleCalls.restartCount === finalChildStatus.restartCount, 'stale calls do not trigger more child restarts');
   assert((await rpc('thread/read', { threadId })).thread.id === threadId, 'thread ID remains the same across reloads');
-  console.log(JSON.stringify({ passed: true, threadId, boundedCrashRecovery: finalChildStatus.recoveryAttempt, terminalStaleCall: terminalError, phases: ['register child after thread start', 'initial discovery and call', 'child catalog update', 'same-thread discovery and call', 'discover Codex configured MCP', 'reload all gateway children and queue Codex-wide refresh with one tool call', 'route and verify targeted global Codex reload request', 'stale schema rejection', 'updated-schema call', 'crash recovery', 'bounded crash-loop stop', 'same-thread stale-schema call receives terminal retry count without restarting child'] }, null, 2));
+  console.log(JSON.stringify({ passed: true, threadId, boundedCrashRecovery: finalChildStatus.recoveryAttempt, terminalStaleCall: terminalError, phases: ['register child after thread start', 'initial discovery and call', 'child catalog update', 'same-thread discovery and call', 'discover Codex configured MCP', 'reload all gateway children and queue Codex-wide refresh with one tool call', 'route and verify targeted global Codex reload request', 'stale schema rejection', 'updated-schema call', 'remove child mid-session and verify same-thread discovery and calls fail closed', 're-add removed child in the same thread', 'crash recovery', 'bounded crash-loop stop', 'same-thread stale-schema call receives terminal retry count without restarting child'] }, null, 2));
 } finally {
   ws?.close(); child?.kill('SIGTERM');
   if (child) await Promise.race([new Promise((resolveExit) => child.once('exit', resolveExit)), delay(2000)]);

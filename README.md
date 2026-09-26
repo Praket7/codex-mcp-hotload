@@ -4,14 +4,14 @@
 
 Develop MCP servers while keeping one stable connection in Codex. Add a server, rebuild it, and discover its current tools from the same conversation.
 
-## Download version 0.2.5
+## Download version 0.2.6
 
-Use Node.js 20 or newer. Codex will download and run the exact npm release from the configuration below. Version 0.2.5 can reload every Hotload child and request a Codex-wide MCP refresh with one tool call. Pinning the version keeps future releases from changing your setup unexpectedly.
+Use Node.js 20 or newer. Codex will download and run the exact npm release from the configuration below. Version 0.2.6 logs tool counts and added, removed, or changed names for each Hotload child reload, and records mid-session child removal. Pinning the version keeps future releases from changing your setup unexpectedly.
 
 To install the same version globally for terminal use, run this command.
 
 ```bash
-npm install --global codex-mcp-hotload@0.2.5
+npm install --global codex-mcp-hotload@0.2.6
 ```
 
 ## Connect Codex
@@ -21,7 +21,7 @@ Add this server entry to your Codex configuration file at `~/.codex/config.toml`
 ```toml
 [mcp_servers.codex-mcp-hotload]
 command = "npx"
-args = ["--yes", "codex-mcp-hotload@0.2.5", "serve"]
+args = ["--yes", "codex-mcp-hotload@0.2.6", "serve"]
 ```
 
 Restart Codex once after adding the gateway. The gateway stays connected while you add and reload child servers.
@@ -51,6 +51,8 @@ Codex native controls are available when Hotload can reach the app server contro
 For servers managed by Hotload, the gateway keeps a stable tool interface in the chat. After a reload, call `hotload_search_tools` again and then `hotload_call_tool` with the returned schema hash; this can use changed child tools without restarting Codex. To add or remove child servers, edit Hotload's JSON config and the gateway discovers those changes on its next tool call.
 
 For MCP servers configured directly in Codex, the reload request is global and Codex queues it for loaded threads' next active turn. Hotload reports that it queued the request, but cannot guarantee that the current chat's model tool catalog refreshed. To get same-chat dynamic access reliably, route those servers through Hotload instead of configuring them directly in Codex. This local gateway uses no paid relay or hosted service. Universal in-place replacement of Codex's own model tool schemas is not available through a supported API.
+
+Hotload writes one-line JSON catalog events to stderr. Reload events include the before and after tool counts, sorted added, removed, and changed tool names, revision, outcome, and duration. Removing a server from Hotload's config emits a separate removal event. Tool descriptions, schemas, call arguments, and credentials are not included.
 
 ```bash
 codex-mcp-hotload codex status

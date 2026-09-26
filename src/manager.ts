@@ -7,6 +7,8 @@ import { readConfig, type ChildConfig } from './config.js';
 import { canonicalJson, Registry } from './core.js';
 
 const DEFAULT_MAX_RESTART_ATTEMPTS = 5;
+const logCatalogEvent = (event: string, details: Record<string, unknown>) => process.stderr.write(`${JSON.stringify({ event, timestamp: new Date().toISOString(), ...details })}\n`);
+const sorted = (names: string[]) => [...names].sort();
 type Managed = { config: ChildConfig; client: Client | undefined;  watcher: FSWatcher | undefined; state: string; lastReload: string | undefined; lastError: string | undefined; stderr: string[]; restartCount: number; startedAt: number | undefined; recoveryAttempt: number; recoveryTimer: NodeJS.Timeout | undefined; lock: Promise<unknown> };
 
 export class Manager {
@@ -21,7 +23,11 @@ export class Manager {
     const operation = this.#configSync.then(async () => {
       const latest = (await readConfig()).servers;
       for (const name of this.names()) if (!(name in latest)) {
-        await this.stop(name); this.registry.replace(name, []); this.#servers.delete(name);
+        const beforeCount = this.registry.list(name).length;
+        await this.stop(name);
+        const diff = this.registry.replace(name, []);
+        logCatalogEvent('mcp.server.removed', { server: name, reason: 'config_removed', beforeCount, afterCount: 0, removed: sorted(diff.removed), revision: diff.revision });
+        this.#servers.delete(name);
       }
       const reload = new Set<string>();
       for (const [name, config] of Object.entries(latest)) {
@@ -45,6 +51,9 @@ export class Manager {
   async reload(name: string, build = true) {
     const server = this.#servers.get(name); if (!server) throw new Error(`Unknown server: ${name}`);
     const operation = server.lock.then(async () => {
+      const startedAt = Date.now();
+      const beforeCount = this.registry.list(name).length;
+      let diff: ReturnType<Registry['replace']> | undefined;
       server.state = build && server.config.build ? 'building' : 'restarting';
       try {
         if (build && server.config.build) await this.#runBuild(server);
@@ -54,13 +63,15 @@ export class Manager {
         if (server.startedAt) server.restartCount++;
         server.client = client; server.state = 'ready'; clearTimeout(server.recoveryTimer); server.recoveryTimer = undefined; server.lastReload = new Date().toISOString(); server.startedAt = Date.now(); server.lastError = undefined;
         const response = await withTimeout(client.listTools(), server.config.startupTimeoutMs ?? 10_000, `Discovering tools for ${name}`);
-        const diff = this.registry.replace(name, response.tools.map((tool) => ({ name: tool.name, ...(tool.title ? { title: tool.title } : {}), ...(tool.description ? { description: tool.description } : {}), inputSchema: tool.inputSchema as Record<string, unknown>, ...(tool.outputSchema ? { outputSchema: tool.outputSchema as Record<string, unknown> } : {}) })));
+        diff = this.registry.replace(name, response.tools.map((tool) => ({ name: tool.name, ...(tool.title ? { title: tool.title } : {}), ...(tool.description ? { description: tool.description } : {}), inputSchema: tool.inputSchema as Record<string, unknown>, ...(tool.outputSchema ? { outputSchema: tool.outputSchema as Record<string, unknown> } : {}) })));
         if (build) server.recoveryAttempt = 0;
+        logCatalogEvent('mcp.catalog.reload', { server: name, trigger: build ? 'reload' : 'recovery', outcome: 'ok', beforeCount, afterCount: response.tools.length, added: sorted(diff.added), removed: sorted(diff.removed), changed: sorted(diff.changed), revision: diff.revision, durationMs: Date.now() - startedAt });
         return diff;
       } catch (error) {
         server.lastError = (error as Error).message;
         if (server.client && server.state === 'building') server.state = 'ready';
-        else { server.state = 'failed'; this.registry.replace(name, []); }
+        else { server.state = 'failed'; diff = this.registry.replace(name, []); }
+        logCatalogEvent('mcp.catalog.reload', { server: name, trigger: build ? 'reload' : 'recovery', outcome: 'failed', beforeCount, afterCount: this.registry.list(name).length, added: sorted(diff?.added ?? []), removed: sorted(diff?.removed ?? []), changed: sorted(diff?.changed ?? []), revision: diff?.revision ?? this.registry.list(name)[0]?.revision ?? 0, durationMs: Date.now() - startedAt, errorType: error instanceof Error ? error.name : 'UnknownError' });
         throw error;
       }
     });
@@ -68,10 +79,10 @@ export class Manager {
     return operation;
   }
   async #connect(server: Managed): Promise<{ client: Client }> {
-    const client = new Client({ name: 'codex-mcp-hotload', version: '0.2.5' });
+    const client = new Client({ name: 'codex-mcp-hotload', version: '0.2.6' });
     if (server.config.transport === 'stdio') {
       const transport = new StdioClientTransport({ command: server.config.command!, args: server.config.args ?? [], ...(server.config.cwd ? { cwd: server.config.cwd } : {}), env: Object.fromEntries(Object.entries({ ...process.env, ...server.config.env }).filter((entry): entry is [string, string] => entry[1] !== undefined)) });
-      transport.onclose = () => { if (server.state === 'ready' && server.client) { server.client = undefined; server.state = 'crash_backoff'; server.lastError = 'Child MCP connection closed unexpectedly'; this.registry.replace(this.#name(server), []); this.#scheduleRecovery(this.#name(server), server); } };
+      transport.onclose = () => { if (server.state === 'ready' && server.client) { server.client = undefined; server.state = 'crash_backoff'; server.lastError = 'Child MCP connection closed unexpectedly'; const name = this.#name(server); const beforeCount = this.registry.list(name).length; const diff = this.registry.replace(name, []); logCatalogEvent('mcp.catalog.unavailable', { server: name, reason: 'child_disconnected', beforeCount, afterCount: 0, removed: sorted(diff.removed), revision: diff.revision }); this.#scheduleRecovery(name, server); } };
       transport.stderr?.on('data', (chunk: Buffer) => this.#recordStderr(server, chunk.toString()));
       try { await withTimeout(client.connect(transport), server.config.startupTimeoutMs ?? 10_000, `Starting ${this.#name(server)}`); } catch (error) { await client.close().catch(() => undefined); throw error; }
       return { client };
