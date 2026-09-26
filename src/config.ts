@@ -8,13 +8,18 @@ export type ChildConfig = {
   watch?: string[]; build?: { command: string; args?: string[] };
   restartDebounceMs?: number; startupTimeoutMs?: number; toolTimeoutMs?: number; maxRestartAttempts?: number;
 };
-export type Config = { version: 1; servers: Record<string, ChildConfig> };
+export type Config = { version: 1; servers: Record<string, ChildConfig>; codexControl?: { url?: string; socketPath?: string } };
 export const configPath = () => process.env.CODEX_MCP_HOTLOAD_CONFIG ?? join(homedir(), '.codex-mcp-hotload', 'config.json');
 
 export async function readConfig(path = configPath()): Promise<Config> {
   try {
     const value = JSON.parse(await readFile(path, 'utf8')) as Config;
     if (value.version !== 1 || !value.servers || typeof value.servers !== 'object') throw new Error('expected version 1 and a servers object');
+    if (value.codexControl !== undefined) {
+      const control = value.codexControl;
+      if (!control || typeof control !== 'object' || Array.isArray(control) || (control.url !== undefined && typeof control.url !== 'string') || (control.socketPath !== undefined && typeof control.socketPath !== 'string') || (control.url !== undefined && control.socketPath !== undefined) || (control.url === undefined && control.socketPath === undefined)) throw new Error('expected codexControl to contain either a URL or socketPath');
+      if (control.url && !['ws:', 'wss:'].includes(new URL(control.url).protocol)) throw new Error('codexControl.url must use ws or wss');
+    }
     for (const [name, server] of Object.entries(value.servers)) {
       if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name)) throw new Error(`invalid server name: ${name}`);
       if (!['stdio', 'streamable-http'].includes(server.transport)) throw new Error(`invalid transport for ${name}`);

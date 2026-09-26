@@ -67,7 +67,7 @@ export class Manager {
     return operation;
   }
   async #connect(server: Managed): Promise<{ client: Client }> {
-    const client = new Client({ name: 'codex-mcp-hotload', version: '0.2.2' });
+    const client = new Client({ name: 'codex-mcp-hotload', version: '0.2.3' });
     if (server.config.transport === 'stdio') {
       const transport = new StdioClientTransport({ command: server.config.command!, args: server.config.args ?? [], ...(server.config.cwd ? { cwd: server.config.cwd } : {}), env: Object.fromEntries(Object.entries({ ...process.env, ...server.config.env }).filter((entry): entry is [string, string] => entry[1] !== undefined)) });
       transport.onclose = () => { if (server.state === 'ready' && server.client) { server.client = undefined; server.state = 'crash_backoff'; server.lastError = 'Child MCP connection closed unexpectedly'; this.registry.replace(this.#name(server), []); this.#scheduleRecovery(this.#name(server), server); } };

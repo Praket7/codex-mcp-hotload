@@ -4,14 +4,14 @@
 
 Develop MCP servers while keeping one stable connection in Codex. Add a server, rebuild it, and discover its current tools from the same conversation.
 
-## Download version 0.2.2
+## Download version 0.2.3
 
-Use Node.js 20 or newer. Codex will download and run the exact published npm release from the configuration below. The latest version is 0.2.2. Pinning the version keeps future releases from changing your setup unexpectedly.
+Use Node.js 20 or newer. Codex will download and run the exact npm release from the configuration below. Version 0.2.3 adds discovery and reload requests for MCP servers configured directly in Codex. Pinning the version keeps future releases from changing your setup unexpectedly.
 
 To install the same version globally for terminal use, run this command.
 
 ```bash
-npm install --global codex-mcp-hotload@0.2.2
+npm install --global codex-mcp-hotload@0.2.3
 ```
 
 ## Connect Codex
@@ -21,7 +21,7 @@ Add this server entry to your Codex configuration file at `~/.codex/config.toml`
 ```toml
 [mcp_servers.codex-mcp-hotload]
 command = "npx"
-args = ["--yes", "codex-mcp-hotload@0.2.2", "serve"]
+args = ["--yes", "codex-mcp-hotload@0.2.3", "serve"]
 ```
 
 Restart Codex once after adding the gateway. The gateway stays connected while you add and reload child servers.
@@ -42,11 +42,13 @@ The gateway connects to local stdio servers and Streamable HTTP servers. It list
 
 Tool hashes cover names, titles, descriptions, and input and output schemas. Reload results show the old and new tool details when something changes. Search for the tool before each call and pass the returned `schemaHash`. Calls without a hash or with an old hash are rejected.
 
-Codex native reload is available when a supported app server endpoint can be reached. A standard Desktop session may not expose an endpoint for external control. The gateway features work without native reload.
+Codex native controls are available when Hotload can reach the app server control socket. By default it checks `$CODEX_HOME/app-server-control/app-server-control.sock`, or `~/.codex/app-server-control/app-server-control.sock` when `CODEX_HOME` is unset. If needed, set `codexControl.socketPath` or `codexControl.url` in the Hotload JSON configuration. A standard Desktop session may not expose this endpoint to an external process, so direct Codex discovery is optional and the gateway child features work without it.
 
 ## Native Codex controls
 
-Inspect or reload connected MCP servers through the Codex app server when that endpoint is available.
+`hotload_list_servers` includes servers configured directly in Codex when the control endpoint is reachable. `hotload_server_status` reports their app server status. `hotload_reload_server` reloads Hotload children directly, or requests `config/mcpServer/reload` for a Codex configured server.
+
+Codex applies this configuration refresh to loaded threads on their next active turn. The request is global and queues refreshes for all configured MCP servers. Hotload checks whether the selected server remains listed, but it does not claim the tools have refreshed in the current conversation before that turn.
 
 ```bash
 codex-mcp-hotload codex status
@@ -65,7 +67,7 @@ npm run build
 node scripts/e2e-app-server.mjs
 ```
 
-The end to end check starts an isolated Codex app server and a fixture MCP. It verifies tool discovery and calls in one thread, reloads an updated child, rejects a stale schema, and checks crash recovery. It does not make a model request or need a Codex account login.
+The end to end check starts an isolated Codex app server and two fixture MCPs, one configured directly in Codex and one registered through Hotload. It verifies direct server discovery and the global reload request, preserves the same thread, reloads an updated child, rejects a stale schema, and checks crash recovery. It does not make a model request or need a Codex account login.
 
 ## Security
 

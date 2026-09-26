@@ -5,7 +5,7 @@ import { Manager } from './manager.js';
 import { serve } from './server.js';
 import { nativeReload, nativeStatus } from './codex.js';
 
-const program = new Command().name('codex-mcp-hotload').description('A stable MCP gateway for hot-reloading child MCP servers.').version('0.2.2');
+const program = new Command().name('codex-mcp-hotload').description('A stable MCP gateway for hot-reloading child MCP servers.').version('0.2.3');
 program.command('init').description('Create an empty configuration.').action(async () => { await writeConfig(await readConfig()); console.log('Created', process.env.CODEX_MCP_HOTLOAD_CONFIG ?? '~/.codex-mcp-hotload/config.json'); });
 program.command('add <name>').argument('[command...]').option('--cwd <path>').option('--watch <glob...>').option('--build <command>').description('Register a stdio child MCP server.').allowUnknownOption().action(async (name: string, command: string[], options) => {
   const config = await readConfig(); const split = command.indexOf('--'); const actual = split >= 0 ? command.slice(split + 1) : command;
@@ -25,7 +25,7 @@ for (const verb of ['reload', 'watch', 'status'] as const) program.command(`${ve
   } finally { await manager.close(); }
 });
 const codex = program.command('codex').description('Inspect or reload MCP configuration through a supported Codex app-server endpoint.');
-const nativeOptions = (command: Command) => command.option('--url <url>', 'App-server WebSocket URL').option('--socket <path>', 'App-server Unix control socket').option('--server <name>', 'Verify a named MCP server reached connected state');
+const nativeOptions = (command: Command) => command.option('--url <url>', 'App-server WebSocket URL').option('--socket <path>', 'App-server Unix control socket').option('--server <name>', 'Select a configured MCP server');
 nativeOptions(codex.command('status')).action(async (options) => { const status = await nativeStatus({ ...(options.url ? { url: options.url } : {}), ...(options.socket ? { socketPath: options.socket } : {}) }); const result = status as { data?: Array<{ name: string }> }; console.log(JSON.stringify(options.server ? { ...result, data: result.data?.filter((item) => item.name === options.server) } : status, null, 2)); });
 nativeOptions(codex.command('reload')).action(async (options) => { const result = await nativeReload({ ...(options.url ? { url: options.url } : {}), ...(options.socket ? { socketPath: options.socket } : {}) }, options.server); console.log(JSON.stringify(result, null, 2)); if (!result.verified) process.exitCode = 2; });
 program.command('doctor').description('Check local prerequisites and configuration.').action(async () => {

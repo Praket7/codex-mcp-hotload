@@ -39,7 +39,7 @@ export class CodexAppServer {
     });
     const client = new CodexAppServer(socket, endpoint.timeoutMs ?? 10_000);
     try {
-      await client.request('initialize', { clientInfo: { name: 'codex-mcp-hotload', version: '0.2.2' }, capabilities: { experimentalApi: true } });
+      await client.request('initialize', { clientInfo: { name: 'codex-mcp-hotload', version: '0.2.3' }, capabilities: { experimentalApi: true } });
       client.notify('initialized');
       return client;
     } catch (error) { await client.close(); throw error; }
@@ -64,26 +64,41 @@ export class CodexAppServer {
 
 export async function nativeStatus(endpoint: CodexEndpoint = {}) {
   const client = await CodexAppServer.connect(endpoint);
-  try { return await client.request('mcpServerStatus/list', {}); } finally { await client.close(); }
+  try { return await listMcpServers(client); } finally { await client.close(); }
 }
-export async function nativeReload(endpoint: CodexEndpoint = {}, serverName?: string, waitMs = 10_000) {
+export async function nativeReload(endpoint: CodexEndpoint = {}, serverName?: string, waitMs = 10_000, threadId?: string) {
   const client = await CodexAppServer.connect(endpoint);
   try {
+    const before = await listMcpServers(client, threadId);
+    const target = serverName ? before.servers.find((server) => server.name === serverName) : undefined;
+    if (serverName && !target) throw new Error(`Unknown Codex MCP server: ${serverName}`);
     await client.request('config/mcpServer/reload', {});
-    const deadline = Date.now() + waitMs;
-    let status: unknown;
-    do {
-      status = await client.request('mcpServerStatus/list', {});
-      if (!serverName || hasConnectedServer(status, serverName)) return { reloaded: true, verified: true, server: serverName ?? null, status };
-      await delay(250);
-    } while (Date.now() < deadline);
-    return { reloaded: true, verified: false, server: serverName, status, error: `Server ${serverName} did not reach connected state within ${waitMs}ms` };
+    if (waitMs > 0) await delay(Math.min(waitMs, 250));
+    const after = await listMcpServers(client, threadId);
+    const status = serverName ? after.servers.find((server) => server.name === serverName) : undefined;
+    return {
+      reloaded: true,
+      verified: !serverName || Boolean(status),
+      server: serverName ?? null,
+      scope: 'all_configured_servers',
+      refresh: 'queued_for_next_active_turn',
+      reconnected: status?.runtimeStatus === undefined || status.runtimeStatus === null ? null : ['connected', 'ready'].includes(status.runtimeStatus.toLowerCase()),
+      statusScope: threadId ? 'thread' : 'global',
+      runtimeStatus: status?.runtimeStatus ?? null,
+      status: serverName ? status ?? null : after.servers,
+      ...(serverName && !status ? { error: `Server ${serverName} is no longer listed after reload` } : {}),
+    };
   } finally { await client.close(); }
 }
 
-function hasConnectedServer(value: unknown, name: string): boolean {
-  if (!value || typeof value !== 'object') return false;
-  const root = value as Record<string, unknown>;
-  const items = Array.isArray(root.data) ? root.data : Array.isArray(root.servers) ? root.servers : [];
-  return items.some((entry) => { if (!entry || typeof entry !== 'object') return false; const item = entry as Record<string, unknown>; return item.name === name && (Boolean(item.tools && typeof item.tools === 'object') || ['connected', 'ready'].includes(String(item.connectionStatus ?? item.status ?? '').toLowerCase())); });
+type ServerStatus = { name: string; runtimeStatus?: string | null; tools?: Record<string, unknown>; toolsError?: string | null; [key: string]: unknown };
+export async function listMcpServers(client: CodexAppServer, threadId?: string): Promise<{ servers: ServerStatus[] }> {
+  const servers: ServerStatus[] = [];
+  let cursor: string | undefined;
+  do {
+    const value = await client.request('mcpServerStatus/list', { ...(cursor ? { cursor } : {}), ...(threadId ? { threadId } : {}), detail: 'toolsAndAuthOnly' }) as { data?: ServerStatus[]; nextCursor?: string | null };
+    servers.push(...(value.data ?? []));
+    cursor = value.nextCursor ?? undefined;
+  } while (cursor);
+  return { servers };
 }

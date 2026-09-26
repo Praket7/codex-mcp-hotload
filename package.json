@@ -1,6 +1,6 @@
 {
   "name": "codex-mcp-hotload",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "A stable MCP gateway for developing and hot-reloading child MCP servers in Codex.",
   "type": "module",
   "bin": {

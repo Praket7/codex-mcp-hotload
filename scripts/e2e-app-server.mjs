@@ -26,7 +26,7 @@ try {
   await mkdir(join(home, 'project'));
   await writeFile(fixtureState, '1');
   await writeFile(bridgeConfig, JSON.stringify({ version: 1, servers: {} }));
-  await writeFile(appConfig, `[mcp_servers.codex-mcp-hotload]\ncommand = ${JSON.stringify(process.execPath)}\nargs = [${JSON.stringify(join(root, 'dist/cli.js'))}, "serve"]\n[mcp_servers.codex-mcp-hotload.env]\nCODEX_MCP_HOTLOAD_CONFIG = ${JSON.stringify(bridgeConfig)}\nFIXTURE_STATE = ${JSON.stringify(fixtureState)}\n`);
+  await writeFile(appConfig, `[mcp_servers.codex-mcp-hotload]\ncommand = ${JSON.stringify(process.execPath)}\nargs = [${JSON.stringify(join(root, 'dist/cli.js'))}, "serve"]\n[mcp_servers.codex-mcp-hotload.env]\nCODEX_MCP_HOTLOAD_CONFIG = ${JSON.stringify(bridgeConfig)}\nFIXTURE_STATE = ${JSON.stringify(fixtureState)}\n[mcp_servers.codex-direct-fixture]\ncommand = ${JSON.stringify(process.execPath)}\nargs = [${JSON.stringify(join(root, 'tests/fixtures/changing-server.mjs'))}]\n[mcp_servers.codex-direct-fixture.env]\nFIXTURE_STATE = ${JSON.stringify(fixtureState)}\n`);
   const port = endpoint.url ? new URL(endpoint.url).port : undefined;
   child = spawn(codex, ['app-server', '--listen', listenUrl], { env: { ...process.env, CODEX_HOME: home, CODEX_CONFIG: appConfig, FIXTURE_STATE: fixtureState }, stdio: ['ignore', 'pipe', 'pipe'] });
   let stderr = ''; child.stderr.on('data', (data) => { stderr = (stderr + data.toString()).slice(-6000); });
@@ -40,8 +40,9 @@ try {
   const thread = await rpc('thread/start', { cwd: join(home, 'project'), ephemeral: true });
   const threadId = thread.thread.id;
   let lastStatus;
-  await waitFor(async () => { lastStatus = await rpc('mcpServerStatus/list', {}); const items = lastStatus.data ?? lastStatus.servers ?? []; return items.some((item) => item.name === 'codex-mcp-hotload' && item.tools && Object.keys(item.tools).length >= 5); }, 20_000, () => `${JSON.stringify(lastStatus)}\n${stderr}`);
+  await waitFor(async () => { lastStatus = await rpc('mcpServerStatus/list', {}); const items = lastStatus.data ?? lastStatus.servers ?? []; return items.some((item) => item.name === 'codex-mcp-hotload' && item.tools && Object.keys(item.tools).length >= 5) && items.some((item) => item.name === 'codex-direct-fixture' && item.tools && Object.keys(item.tools).length >= 2); }, 20_000, () => `${JSON.stringify(lastStatus)}\n${stderr}`);
   const call = async (server, tool, args = {}) => rpc('mcpServer/tool/call', { threadId, server, tool, arguments: args });
+  await writeFile(bridgeConfig, JSON.stringify({ version: 1, servers: {}, codexControl: { socketPath: controlSocket } }));
   execFileSync(process.execPath, [join(root, 'dist/cli.js'), 'add', 'fixture', '--cwd', root, '--', process.execPath, join(root, 'tests/fixtures/changing-server.mjs')], { env: { ...process.env, CODEX_MCP_HOTLOAD_CONFIG: bridgeConfig } });
   const childConfig = JSON.parse(await readFile(bridgeConfig, 'utf8')); childConfig.servers.fixture.maxRestartAttempts = 3; await writeFile(bridgeConfig, JSON.stringify(childConfig));
   const search1 = await call('codex-mcp-hotload', 'hotload_search_tools', { query: 'echo', server: 'fixture' });
@@ -57,8 +58,17 @@ try {
   assert(findText(reload2).includes('changes'), 'reload includes a readable catalog diff');
   const search2 = await call('codex-mcp-hotload', 'hotload_search_tools', { query: 'git branch', server: 'fixture' });
   assert(findText(search2).includes('git_branch'), 'same thread sees new tool');
-  const native = await nativeReload(endpoint, 'codex-mcp-hotload');
-  assert(native.verified, 'native Codex reload/status verifies bridge remains connected');
+  const direct = await call('codex-mcp-hotload', 'hotload_list_servers');
+  assert(findText(direct).includes('codex-direct-fixture'), 'gateway discovers a Codex configured MCP');
+  await writeFile(bridgeConfig, JSON.stringify({ version: 1, servers: { fixture: { transport: 'stdio', command: process.execPath, args: [join(root, 'tests/fixtures/changing-server.mjs')], env: { FIXTURE_STATE: fixtureState }, maxRestartAttempts: 3 } }, codexControl: { socketPath: controlSocket } }));
+  const directStatus = await call('codex-mcp-hotload', 'hotload_server_status', { server: 'codex-direct-fixture' });
+  assert(findText(directStatus).includes('"source":"codex"'), 'gateway reports Codex configured MCP status');
+  const native = await call('codex-mcp-hotload', 'hotload_reload_server', { server: 'codex-direct-fixture' });
+  const nativeResult = JSON.parse(findText(native));
+  assert(nativeResult.reloaded && nativeResult.verified && nativeResult.scope === 'all_configured_servers', `native reload accepted and target remains listed: ${findText(native)}`);
+  assert(nativeResult.refresh === 'queued_for_next_active_turn' && nativeResult.reconnected === null, 'native reload accurately reports queued refresh and unavailable unscoped runtime state');
+  assert((await rpc('thread/read', { threadId })).thread.id === threadId, 'native Codex MCP reload retains the same thread');
+  assert((await nativeReload(endpoint, 'codex-mcp-hotload')).verified, 'native Codex reload/status verifies bridge remains configured');
   const branchTool = JSON.parse(findText(search2)).matches.find((tool) => tool.name === 'git_branch');
   const branch = await call('codex-mcp-hotload', 'hotload_call_tool', { server: 'fixture', tool: 'git_branch', arguments: {}, expectedSchemaHash: branchTool.schemaHash });
   assert(findText(branch).includes('main'), 'new tool executes in same thread');
@@ -80,7 +90,7 @@ try {
   let finalChildStatus;
   await waitFor(async () => { const r = await call('codex-mcp-hotload', 'hotload_server_status', { server: 'fixture' }); finalChildStatus = JSON.parse(findText(r)); return finalChildStatus.state === 'failed' && finalChildStatus.recoveryAttempt === 3; }, 15_000);
   assert((await rpc('thread/read', { threadId })).thread.id === threadId, 'thread ID remains the same across reloads');
-  console.log(JSON.stringify({ passed: true, threadId, boundedCrashRecovery: finalChildStatus.recoveryAttempt, phases: ['register child after thread start', 'initial discovery and call', 'child catalog update', 'same-thread discovery and call', 'native reload and status verification', 'stale schema rejection', 'updated-schema call', 'crash recovery', 'bounded crash-loop stop'] }, null, 2));
+  console.log(JSON.stringify({ passed: true, threadId, boundedCrashRecovery: finalChildStatus.recoveryAttempt, phases: ['register child after thread start', 'initial discovery and call', 'child catalog update', 'same-thread discovery and call', 'discover Codex configured MCP', 'route and verify global Codex reload request', 'stale schema rejection', 'updated-schema call', 'crash recovery', 'bounded crash-loop stop'] }, null, 2));
 } finally {
   ws?.close(); child?.kill('SIGTERM');
   if (child) await Promise.race([new Promise((resolveExit) => child.once('exit', resolveExit)), delay(2000)]);
