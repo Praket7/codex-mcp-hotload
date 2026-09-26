@@ -2,6 +2,10 @@
   "name": "codex-mcp-hotload",
   "version": "0.2.3",
   "description": "A stable MCP gateway for developing and hot-reloading child MCP servers in Codex.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Praket7/codex-mcp-hotload.git"
+  },
   "type": "module",
   "bin": {
     "codex-mcp-hotload": "dist/cli.js"
