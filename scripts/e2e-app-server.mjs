@@ -89,8 +89,18 @@ try {
   await call('codex-mcp-hotload', 'hotload_call_tool', { server: 'fixture', tool: 'crash_child', arguments: {}, expectedSchemaHash: crashTool.schemaHash }).catch(() => undefined);
   let finalChildStatus;
   await waitFor(async () => { const r = await call('codex-mcp-hotload', 'hotload_server_status', { server: 'fixture' }); finalChildStatus = JSON.parse(findText(r)); return finalChildStatus.state === 'failed' && finalChildStatus.recoveryAttempt === 3; }, 15_000);
+  assert(finalChildStatus.maxRestartAttempts === 3, 'server status reports the retry limit');
+  const staleAfterExhaustion = await call('codex-mcp-hotload', 'hotload_call_tool', { server: 'fixture', tool: 'crash_child', arguments: {}, expectedSchemaHash: crashTool.schemaHash });
+  assert(staleAfterExhaustion.isError === true, `exhausted child call is marked as a tool error: ${findText(staleAfterExhaustion)}`);
+  const terminalError = JSON.parse(findText(staleAfterExhaustion)).error;
+  assert(terminalError.code === 'RECOVERY_EXHAUSTED' && terminalError.recoveryAttempts === 3 && terminalError.maxRestartAttempts === 3, `terminal error reports retries used and allowed: ${findText(staleAfterExhaustion)}`);
+  assert(terminalError.retryable === false && terminalError.message.includes('Stop calling this child'), 'terminal error tells the model to stop retrying');
+  const repeatedStaleCall = await call('codex-mcp-hotload', 'hotload_call_tool', { server: 'fixture', tool: 'crash_child', arguments: {}, expectedSchemaHash: crashTool.schemaHash });
+  assert(repeatedStaleCall.isError === true && findText(repeatedStaleCall).includes('RECOVERY_EXHAUSTED'), 'repeat stale calls receive the terminal recovery error');
+  const afterStaleCalls = JSON.parse(findText(await call('codex-mcp-hotload', 'hotload_server_status', { server: 'fixture' })));
+  assert(afterStaleCalls.state === 'failed' && afterStaleCalls.recoveryAttempt === 3 && afterStaleCalls.restartCount === finalChildStatus.restartCount, 'stale calls do not trigger more child restarts');
   assert((await rpc('thread/read', { threadId })).thread.id === threadId, 'thread ID remains the same across reloads');
-  console.log(JSON.stringify({ passed: true, threadId, boundedCrashRecovery: finalChildStatus.recoveryAttempt, phases: ['register child after thread start', 'initial discovery and call', 'child catalog update', 'same-thread discovery and call', 'discover Codex configured MCP', 'route and verify global Codex reload request', 'stale schema rejection', 'updated-schema call', 'crash recovery', 'bounded crash-loop stop'] }, null, 2));
+  console.log(JSON.stringify({ passed: true, threadId, boundedCrashRecovery: finalChildStatus.recoveryAttempt, terminalStaleCall: terminalError, phases: ['register child after thread start', 'initial discovery and call', 'child catalog update', 'same-thread discovery and call', 'discover Codex configured MCP', 'route and verify global Codex reload request', 'stale schema rejection', 'updated-schema call', 'crash recovery', 'bounded crash-loop stop', 'same-thread stale-schema call receives terminal retry count without restarting child'] }, null, 2));
 } finally {
   ws?.close(); child?.kill('SIGTERM');
   if (child) await Promise.race([new Promise((resolveExit) => child.once('exit', resolveExit)), delay(2000)]);

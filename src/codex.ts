@@ -39,7 +39,7 @@ export class CodexAppServer {
     });
     const client = new CodexAppServer(socket, endpoint.timeoutMs ?? 10_000);
     try {
-      await client.request('initialize', { clientInfo: { name: 'codex-mcp-hotload', version: '0.2.3' }, capabilities: { experimentalApi: true } });
+      await client.request('initialize', { clientInfo: { name: 'codex-mcp-hotload', version: '0.2.4' }, capabilities: { experimentalApi: true } });
       client.notify('initialized');
       return client;
     } catch (error) { await client.close(); throw error; }

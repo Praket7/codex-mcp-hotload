@@ -6,6 +6,7 @@ import chokidar, { type FSWatcher } from 'chokidar';
 import { readConfig, type ChildConfig } from './config.js';
 import { canonicalJson, Registry } from './core.js';
 
+const DEFAULT_MAX_RESTART_ATTEMPTS = 5;
 type Managed = { config: ChildConfig; client: Client | undefined;  watcher: FSWatcher | undefined; state: string; lastReload: string | undefined; lastError: string | undefined; stderr: string[]; restartCount: number; startedAt: number | undefined; recoveryAttempt: number; recoveryTimer: NodeJS.Timeout | undefined; lock: Promise<unknown> };
 
 export class Manager {
@@ -67,7 +68,7 @@ export class Manager {
     return operation;
   }
   async #connect(server: Managed): Promise<{ client: Client }> {
-    const client = new Client({ name: 'codex-mcp-hotload', version: '0.2.3' });
+    const client = new Client({ name: 'codex-mcp-hotload', version: '0.2.4' });
     if (server.config.transport === 'stdio') {
       const transport = new StdioClientTransport({ command: server.config.command!, args: server.config.args ?? [], ...(server.config.cwd ? { cwd: server.config.cwd } : {}), env: Object.fromEntries(Object.entries({ ...process.env, ...server.config.env }).filter((entry): entry is [string, string] => entry[1] !== undefined)) });
       transport.onclose = () => { if (server.state === 'ready' && server.client) { server.client = undefined; server.state = 'crash_backoff'; server.lastError = 'Child MCP connection closed unexpectedly'; this.registry.replace(this.#name(server), []); this.#scheduleRecovery(this.#name(server), server); } };
@@ -86,7 +87,7 @@ export class Manager {
     server.stderr = (server.stderr.join('') + safe).slice(-8192).split('\n');
   }
   #scheduleRecovery(name: string, server: Managed) {
-    const maximum = server.config.maxRestartAttempts ?? 5;
+    const maximum = server.config.maxRestartAttempts ?? DEFAULT_MAX_RESTART_ATTEMPTS;
     if (server.recoveryAttempt >= maximum) { server.state = 'failed'; server.lastError = `Child recovery stopped after ${maximum} attempts`; return; }
     const waits = [250, 500, 1000, 2000, 5000];
     const wait = waits[Math.min(server.recoveryAttempt, waits.length - 1)]!;
@@ -110,7 +111,7 @@ export class Manager {
   async stop(name: string) { const server = this.#servers.get(name); if (server) await this.#stop(server, name); }
   getClient(name: string) { return this.#servers.get(name)?.client; }
   toolTimeout(name: string) { return this.#servers.get(name)?.config.toolTimeoutMs ?? 60_000; }
-  status() { return [...this.#servers.entries()].map(([name, s]) => ({ name, state: s.state, transport: s.config.transport, revision: this.registry.list(name)[0]?.revision ?? 0, toolCount: this.registry.list(name).length, lastReload: s.lastReload ?? null, lastError: s.lastError ?? null, restartCount: s.restartCount, recoveryAttempt: s.recoveryAttempt, uptimeMs: s.startedAt ? Date.now() - s.startedAt : null, watch: Boolean(s.watcher), stderrTail: s.stderr.join('').slice(-2000) })); }
+  status() { return [...this.#servers.entries()].map(([name, s]) => ({ name, state: s.state, transport: s.config.transport, revision: this.registry.list(name)[0]?.revision ?? 0, toolCount: this.registry.list(name).length, lastReload: s.lastReload ?? null, lastError: s.lastError ?? null, restartCount: s.restartCount, recoveryAttempt: s.recoveryAttempt, maxRestartAttempts: s.config.maxRestartAttempts ?? DEFAULT_MAX_RESTART_ATTEMPTS, uptimeMs: s.startedAt ? Date.now() - s.startedAt : null, watch: Boolean(s.watcher), stderrTail: s.stderr.join('').slice(-2000) })); }
   async watch(name: string) {
     const server = this.#servers.get(name); if (!server) throw new Error(`Unknown server: ${name}`);
     if (!server.config.watch?.length) throw new Error(`${name} has no watch patterns; configure watch in config.json`);

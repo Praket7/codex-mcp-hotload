@@ -10,13 +10,35 @@ import { readConfig } from './config.js';
 
 const withTimeout = <T>(promise: Promise<T>, timeoutMs: number): Promise<T> => { let timer: NodeJS.Timeout; return Promise.race([promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`Tool call timed out after ${timeoutMs}ms`)), timeoutMs); })]).finally(() => clearTimeout(timer!)); };
 const text = (data: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(data) }] });
-const fail = (code: string, message: string, extra: object = {}) => text({ error: { code, message, ...extra } });
+const fail = (code: string, message: string, extra: object = {}) => ({ ...text({ error: { code, message, ...extra } }), isError: true });
+const unavailableChild = (manager: Manager, name: string) => {
+  const status = manager.status().find((item) => item.name === name);
+  const attempts = status?.recoveryAttempt ?? 0;
+  const maximum = status?.maxRestartAttempts ?? 5;
+  const exhausted = status?.state === 'failed' && attempts >= maximum;
+  const pending = ['crash_backoff', 'restarting', 'starting'].includes(status?.state ?? '');
+  return fail(exhausted ? 'RECOVERY_EXHAUSTED' : 'SERVER_UNAVAILABLE', exhausted
+    ? `Automatic recovery for ${name} is exhausted after ${attempts} of ${maximum} attempts. Stop calling this child. Fix it, then use hotload_reload_server to try again.`
+    : pending
+      ? `${name} is unavailable while recovery runs (${attempts} of ${maximum} attempts). Wait for recovery before calling it again.`
+      : `${name} is not ready. Fix it, then use hotload_reload_server to try again.`, {
+    server: name,
+    state: status?.state ?? 'unavailable',
+    recoveryAttempts: attempts,
+    maxRestartAttempts: maximum,
+    recoveryPending: pending,
+    recoveryExhausted: exhausted,
+    retryable: false,
+    nextAction: exhausted || !pending ? 'hotload_reload_server' : 'hotload_server_status',
+    ...(status?.lastError ? { lastError: status.lastError } : {}),
+  });
+};
 export function createServer(manager: Manager) {
   const codexEndpoint = async (): Promise<CodexEndpoint> => {
     const config = await readConfig();
     return config.codexControl ?? { socketPath: join(process.env.CODEX_HOME ?? join(homedir(), '.codex'), 'app-server-control', 'app-server-control.sock') };
   };
-  const server = new McpServer({ name: 'codex-mcp-hotload', version: '0.2.3' });
+  const server = new McpServer({ name: 'codex-mcp-hotload', version: '0.2.4' });
   server.registerTool('hotload_list_servers', { description: 'List Hotload child servers and MCP servers configured directly in Codex.', inputSchema: {} }, async () => {
     await manager.refreshConfig();
     const local = manager.status();
@@ -37,13 +59,15 @@ export function createServer(manager: Manager) {
   });
   server.registerTool('hotload_call_tool', { description: 'Validate against the current schema and invoke a child MCP tool.', inputSchema: { server: z.string(), tool: z.string(), arguments: z.record(z.string(), z.unknown()).default({}), expectedSchemaHash: z.string().optional() } }, async ({ server: name, tool: toolName, arguments: args, expectedSchemaHash }) => {
     await manager.refreshConfig();
+    const status = manager.status().find((item) => item.name === name);
+    if (status && status.state !== 'ready') return unavailableChild(manager, name);
     const record = manager.registry.get(name, toolName); if (!record) return fail('NOT_FOUND', `Unknown tool: ${name}.${toolName}`);
     if (!expectedSchemaHash) return fail('SCHEMA_HASH_REQUIRED', 'Search for the current tool definition and pass its schemaHash before calling it.', { current: { name: record.name, ...(record.title ? { title: record.title } : {}), ...(record.description ? { description: record.description } : {}), schemaHash: record.schemaHash, inputSchema: record.inputSchema, outputSchema: record.outputSchema ?? {} } });
     if (expectedSchemaHash !== record.schemaHash) return fail('STALE_SCHEMA', 'Tool definition has changed. Search again and review its current definition before calling it.', { oldSchemaHash: expectedSchemaHash, current: { name: record.name, ...(record.title ? { title: record.title } : {}), ...(record.description ? { description: record.description } : {}), schemaHash: record.schemaHash, inputSchema: record.inputSchema, outputSchema: record.outputSchema ?? {} } });
     const errors = validateArguments(record.inputSchema, args); if (errors.length) return fail('INVALID_ARGUMENTS', errors.join('; '), { schemaHash: record.schemaHash });
-    const client = manager.getClient(name); if (!client) return fail('SERVER_UNAVAILABLE', `${name} is not ready.`);
+    const client = manager.getClient(name); if (!client) return unavailableChild(manager, name);
     try { const result = await withTimeout(client.callTool({ name: toolName, arguments: args }), manager.toolTimeout(name)); return text({ server: name, tool: toolName, schemaHash: record.schemaHash, result }); }
-    catch (error) { return fail('CALL_FAILED', (error as Error).message); }
+    catch (error) { return manager.status().find((item) => item.name === name)?.state === 'ready' ? fail('CALL_FAILED', (error as Error).message) : unavailableChild(manager, name); }
   });
   return server;
 }

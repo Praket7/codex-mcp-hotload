@@ -4,14 +4,14 @@
 
 Develop MCP servers while keeping one stable connection in Codex. Add a server, rebuild it, and discover its current tools from the same conversation.
 
-## Download version 0.2.3
+## Download version 0.2.4
 
-Use Node.js 20 or newer. Codex will download and run the exact npm release from the configuration below. Version 0.2.3 adds discovery and reload requests for MCP servers configured directly in Codex. Pinning the version keeps future releases from changing your setup unexpectedly.
+Use Node.js 20 or newer. Codex will download and run the exact npm release from the configuration below. Version 0.2.4 reports when child recovery attempts are exhausted and tells the model to stop calling that child. Pinning the version keeps future releases from changing your setup unexpectedly.
 
 To install the same version globally for terminal use, run this command.
 
 ```bash
-npm install --global codex-mcp-hotload@0.2.3
+npm install --global codex-mcp-hotload@0.2.4
 ```
 
 ## Connect Codex
@@ -21,7 +21,7 @@ Add this server entry to your Codex configuration file at `~/.codex/config.toml`
 ```toml
 [mcp_servers.codex-mcp-hotload]
 command = "npx"
-args = ["--yes", "codex-mcp-hotload@0.2.3", "serve"]
+args = ["--yes", "codex-mcp-hotload@0.2.4", "serve"]
 ```
 
 Restart Codex once after adding the gateway. The gateway stays connected while you add and reload child servers.
@@ -38,7 +38,7 @@ Then ask Codex to search for the child server tools and call one. When you chang
 
 ## What it supports
 
-The gateway connects to local stdio servers and Streamable HTTP servers. It lists and searches their tools, checks arguments against the current schema, and detects when a saved schema is stale. It can watch files and rebuild a child when configured. If a stdio child exits unexpectedly, the gateway retries it with bounded backoff and reports its status.
+The gateway connects to local stdio servers and Streamable HTTP servers. It lists and searches their tools, checks arguments against the current schema, and detects when a saved schema is stale. It can watch files and rebuild a child when configured. If a stdio child exits unexpectedly, the gateway retries it with bounded backoff and reports its status. After the retry limit, calls using saved child details return a terminal error with the retry count and tell the model to stop calling until the child is manually reloaded.
 
 Tool hashes cover names, titles, descriptions, and input and output schemas. Reload results show the old and new tool details when something changes. Search for the tool before each call and pass the returned `schemaHash`. Calls without a hash or with an old hash are rejected.
 
