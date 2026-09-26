@@ -4,14 +4,14 @@
 
 Develop MCP servers while keeping one stable connection in Codex. Add a server, rebuild it, and discover its current tools from the same conversation.
 
-## Download version 0.2.4
+## Download version 0.2.5
 
-Use Node.js 20 or newer. Codex will download and run the exact npm release from the configuration below. Version 0.2.4 reports when child recovery attempts are exhausted and tells the model to stop calling that child. Pinning the version keeps future releases from changing your setup unexpectedly.
+Use Node.js 20 or newer. Codex will download and run the exact npm release from the configuration below. Version 0.2.5 can reload every Hotload child and request a Codex-wide MCP refresh with one tool call. Pinning the version keeps future releases from changing your setup unexpectedly.
 
 To install the same version globally for terminal use, run this command.
 
 ```bash
-npm install --global codex-mcp-hotload@0.2.4
+npm install --global codex-mcp-hotload@0.2.5
 ```
 
 ## Connect Codex
@@ -21,7 +21,7 @@ Add this server entry to your Codex configuration file at `~/.codex/config.toml`
 ```toml
 [mcp_servers.codex-mcp-hotload]
 command = "npx"
-args = ["--yes", "codex-mcp-hotload@0.2.4", "serve"]
+args = ["--yes", "codex-mcp-hotload@0.2.5", "serve"]
 ```
 
 Restart Codex once after adding the gateway. The gateway stays connected while you add and reload child servers.
@@ -46,14 +46,18 @@ Codex native controls are available when Hotload can reach the app server contro
 
 ## Native Codex controls
 
-`hotload_list_servers` includes servers configured directly in Codex when the control endpoint is reachable. `hotload_server_status` reports their app server status. `hotload_reload_server` reloads Hotload children directly, or requests `config/mcpServer/reload` for a Codex configured server.
+`hotload_list_servers` includes servers configured directly in Codex when the control endpoint is reachable. `hotload_server_status` reports their app server status. `hotload_reload_server` reloads one Hotload child or, when called without a `server`, reloads every Hotload child and requests `config/mcpServer/reload` for all Codex configured servers.
 
-Codex applies this configuration refresh to loaded threads on their next active turn. The request is global and queues refreshes for all configured MCP servers. Hotload checks whether the selected server remains listed, but it does not claim the tools have refreshed in the current conversation before that turn.
+For servers managed by Hotload, the gateway keeps a stable tool interface in the chat. After a reload, call `hotload_search_tools` again and then `hotload_call_tool` with the returned schema hash; this can use changed child tools without restarting Codex. To add or remove child servers, edit Hotload's JSON config and the gateway discovers those changes on its next tool call.
+
+For MCP servers configured directly in Codex, the reload request is global and Codex queues it for loaded threads' next active turn. Hotload reports that it queued the request, but cannot guarantee that the current chat's model tool catalog refreshed. To get same-chat dynamic access reliably, route those servers through Hotload instead of configuring them directly in Codex. This local gateway uses no paid relay or hosted service. Universal in-place replacement of Codex's own model tool schemas is not available through a supported API.
 
 ```bash
 codex-mcp-hotload codex status
 codex-mcp-hotload codex reload --server codex-mcp-hotload
 ```
+
+In a chat, call `hotload_reload_server` with no arguments to reload all gateway children and request the Codex-wide refresh. Then search for changed child tools with `hotload_search_tools` and call them through `hotload_call_tool`.
 
 ## Develop and verify
 

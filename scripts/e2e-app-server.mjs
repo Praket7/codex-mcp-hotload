@@ -60,6 +60,9 @@ try {
   assert(findText(search2).includes('git_branch'), 'same thread sees new tool');
   const direct = await call('codex-mcp-hotload', 'hotload_list_servers');
   assert(findText(direct).includes('codex-direct-fixture'), 'gateway discovers a Codex configured MCP');
+  const reloadAll = JSON.parse(findText(await call('codex-mcp-hotload', 'hotload_reload_server', {})));
+  assert(reloadAll.allRequestsAccepted && reloadAll.hotload.reloaded === 1 && reloadAll.codex.refresh === 'queued_for_next_active_turn', `one call reloads every gateway child and requests Codex refresh: ${JSON.stringify(reloadAll)}`);
+  assert((await rpc('thread/read', { threadId })).thread.id === threadId, 'reload all preserves the same thread');
   await writeFile(bridgeConfig, JSON.stringify({ version: 1, servers: { fixture: { transport: 'stdio', command: process.execPath, args: [join(root, 'tests/fixtures/changing-server.mjs')], env: { FIXTURE_STATE: fixtureState }, maxRestartAttempts: 3 } }, codexControl: { socketPath: controlSocket } }));
   const directStatus = await call('codex-mcp-hotload', 'hotload_server_status', { server: 'codex-direct-fixture' });
   assert(findText(directStatus).includes('"source":"codex"'), 'gateway reports Codex configured MCP status');
@@ -100,7 +103,7 @@ try {
   const afterStaleCalls = JSON.parse(findText(await call('codex-mcp-hotload', 'hotload_server_status', { server: 'fixture' })));
   assert(afterStaleCalls.state === 'failed' && afterStaleCalls.recoveryAttempt === 3 && afterStaleCalls.restartCount === finalChildStatus.restartCount, 'stale calls do not trigger more child restarts');
   assert((await rpc('thread/read', { threadId })).thread.id === threadId, 'thread ID remains the same across reloads');
-  console.log(JSON.stringify({ passed: true, threadId, boundedCrashRecovery: finalChildStatus.recoveryAttempt, terminalStaleCall: terminalError, phases: ['register child after thread start', 'initial discovery and call', 'child catalog update', 'same-thread discovery and call', 'discover Codex configured MCP', 'route and verify global Codex reload request', 'stale schema rejection', 'updated-schema call', 'crash recovery', 'bounded crash-loop stop', 'same-thread stale-schema call receives terminal retry count without restarting child'] }, null, 2));
+  console.log(JSON.stringify({ passed: true, threadId, boundedCrashRecovery: finalChildStatus.recoveryAttempt, terminalStaleCall: terminalError, phases: ['register child after thread start', 'initial discovery and call', 'child catalog update', 'same-thread discovery and call', 'discover Codex configured MCP', 'reload all gateway children and queue Codex-wide refresh with one tool call', 'route and verify targeted global Codex reload request', 'stale schema rejection', 'updated-schema call', 'crash recovery', 'bounded crash-loop stop', 'same-thread stale-schema call receives terminal retry count without restarting child'] }, null, 2));
 } finally {
   ws?.close(); child?.kill('SIGTERM');
   if (child) await Promise.race([new Promise((resolveExit) => child.once('exit', resolveExit)), delay(2000)]);

@@ -52,9 +52,20 @@ export function createServer(manager: Manager) {
     catch (error) { return fail('CODEX_CONTROL_UNAVAILABLE', (error as Error).message); }
   });
   server.registerTool('hotload_search_tools', { description: 'Search current tools exposed by child MCP servers.', inputSchema: { query: z.string(), server: z.string().optional(), limit: z.number().int().min(1).max(50).optional() } }, async ({ query, server: name, limit }) => { await manager.refreshConfig(); return text({ matches: searchTools(manager.registry.list(name), query, limit).map((tool) => ({ ...tool })) }); })
-  server.registerTool('hotload_reload_server', { description: 'Reload a Hotload child or request Codex to refresh its configured MCP servers.', inputSchema: { server: z.string(), reason: z.string().optional() } }, async ({ server: name }) => {
+  server.registerTool('hotload_reload_server', { description: 'Reload one Hotload child, or omit server to reload all Hotload children and request Codex to refresh its configured MCP servers. Codex applies that refresh on a later active turn; use hotload_search_tools for Hotload child tools after reload.', inputSchema: { server: z.string().optional() } }, async ({ server: name }) => {
     await manager.refreshConfig();
-    if (manager.status().some((item) => item.name === name)) { try { return text({ source: 'hotload', ...await manager.reload(name) }); } catch (error) { return fail('RELOAD_FAILED', (error as Error).message); } }
+    if (name && manager.status().some((item) => item.name === name)) { try { return text({ source: 'hotload', ...await manager.reload(name) }); } catch (error) { return fail('RELOAD_FAILED', (error as Error).message); } }
+    if (!name) {
+      const children = await Promise.all(manager.names().map(async (server) => {
+        try { return { server, ...(await manager.reload(server)) }; }
+        catch (error) { return { server, error: (error as Error).message }; }
+      }));
+      let codex;
+      try { codex = await nativeReload(await codexEndpoint(), undefined, 0); }
+      catch (error) { codex = { reloaded: false, error: (error as Error).message }; }
+      const failedChildren = children.filter((child) => 'error' in child);
+      return text({ source: 'all', allRequestsAccepted: failedChildren.length === 0 && codex.reloaded, hotload: { reloaded: children.length - failedChildren.length, failed: failedChildren, servers: children }, codex });
+    }
     try { return text({ source: 'codex', ...await nativeReload(await codexEndpoint(), name, 0) }); } catch (error) { return fail('CODEX_RELOAD_FAILED', (error as Error).message); }
   });
   server.registerTool('hotload_call_tool', { description: 'Validate against the current schema and invoke a child MCP tool.', inputSchema: { server: z.string(), tool: z.string(), arguments: z.record(z.string(), z.unknown()).default({}), expectedSchemaHash: z.string().optional() } }, async ({ server: name, tool: toolName, arguments: args, expectedSchemaHash }) => {
